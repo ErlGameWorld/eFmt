@@ -10,6 +10,9 @@
    format/2
    , format/3
 
+   , formatBin/2
+   , formatBin/3
+
    , scan/2
    , build/1
    , build/2
@@ -55,6 +58,22 @@ format(Format, Args) ->
 -spec format(Format :: io:format(), Data :: [term()], Options :: [{charsLimit, CharsLimit :: charsLimit()}]) -> chars().
 format(Format, Args, Options) ->
    try fWrite(Format, Args, Options)
+   catch
+      _C:_R ->
+         erlang:error(badarg, [Format, Args])
+   end.
+
+-spec formatBin(Format :: io:format(), Data :: [term()]) -> chars().
+formatBin(Format, Args) ->
+   try iolist_to_binary(fWrite(Format, Args))
+   catch
+      _C:_R:S ->
+         erlang:error(badarg, [Format, Args, _C, _R, S])
+   end.
+
+-spec formatBin(Format :: io:format(), Data :: [term()], Options :: [{charsLimit, CharsLimit :: charsLimit()}]) -> chars().
+formatBin(Format, Args, Options) ->
+   try iolist_to_binary(fWrite(Format, Args, Options))
    catch
       _C:_R ->
          erlang:error(badarg, [Format, Args])
@@ -140,11 +159,39 @@ write(Term, Depth, Width, CharsLimit, Encoding, Strings) ->
 
 -define(writeInt(Int), integer_to_binary(Term)).
 -define(writeFloat(Float), floatG(Term)).
--define(writeAtom(Atom, Encoding), <<"'", (atom_to_binary(Atom, Encoding))/binary, "'">>).
 -define(writePort(Port), list_to_binary(erlang:port_to_list(Port))).
 -define(writeRef(Ref), list_to_binary(erlang:ref_to_list(Ref))).
 -define(writePid(Ref), list_to_binary(erlang:pid_to_list(Ref))).
 -define(writeFun(Fun), list_to_binary(erlang:fun_to_list(Fun))).
+
+writeAtom(Atom, Encoding) ->
+   AtomBin = atom_to_binary(Atom, Encoding),
+   case isQuoteAtom(Atom, AtomBin) of
+      true ->
+         <<"'", (atom_to_binary(Atom, Encoding))/binary, "'">>;
+      _ ->
+         AtomBin
+   end.
+
+isQuoteAtom(Atom, AtomBin) ->
+   case erl_scan:reserved_word(Atom) of
+      true -> true;
+      _ ->
+         visualAtomBin(AtomBin)
+   end.
+
+visualAtomBin(<<>>) -> false;
+visualAtomBin(<<C/utf8, Left/binary>>) -> ?IIF(visualAtomChar(C), visualAtomBin(Left), true);
+visualAtomBin(_) -> true.
+
+visualAtomChar(C) when C >= $a, C =< $z -> true;
+visualAtomChar(C) when C >= $ß, C =< $ÿ, C =/= $÷ -> true;
+visualAtomChar(C) when C >= $A, C =< $Z -> true;
+visualAtomChar(C) when C >= $À, C =< $Þ, C =/= $× -> true;
+visualAtomChar(C) when C >= $0, C =< $9 -> true;
+visualAtomChar($_) -> true;
+visualAtomChar($@) -> true;
+visualAtomChar(_) -> false.
 
 %% **************************************************** ~w start *******************************************************
 writeList([], _D, _E, BinAcc) ->
@@ -381,7 +428,7 @@ writeBinary(Bin, Depth, Width, Encoding, Strings, SumLC, BinAcc) ->
 %% ~w
 writeTerm(_Term, Depth, _E) when Depth == 0 -> <<"...">>;
 writeTerm(Term, _Depth, _E) when is_integer(Term) -> ?writeInt(Term);
-writeTerm(Term, _Depth, E) when is_atom(Term) -> ?writeAtom(Term, E);
+writeTerm(Term, _Depth, E) when is_atom(Term) -> writeAtom(Term, E);
 writeTerm(Term, Depth, E) when is_list(Term) -> writeList(Term, Depth, E, <<"[">>);
 writeTerm(Term, Depth, E) when is_map(Term) -> writeMap(Term, Depth, E, <<"#{">>);
 writeTerm(Term, Depth, E) when is_tuple(Term) -> writeTuple(Term, Depth, E, 1, tuple_size(Term), <<"{">>);
@@ -395,7 +442,7 @@ writeTerm(Term, _Depth, _E) when is_function(Term) -> ?writeFun(Term).
 %% ~p
 writeTerm(_Term, Depth, _Width, _Encoding, _Strings) when Depth == 0 -> <<"...">>;
 writeTerm(Term, _Depth, _Width, _Encoding, _Strings) when is_integer(Term) -> ?writeInt(Term);
-writeTerm(Term, _Depth, _Width, Encoding, _Strings) when is_atom(Term) -> ?writeAtom(Term, Encoding);
+writeTerm(Term, _Depth, _Width, Encoding, _Strings) when is_atom(Term) -> writeAtom(Term, Encoding);
 writeTerm(Term, Depth, Width, Encoding, Strings) when is_list(Term) -> writeList(Term, Depth, Width, Encoding, Strings);
 writeTerm(Term, Depth, Width, Encoding, Strings) when is_map(Term) -> writeMap(Term, Depth, Width, Encoding, Strings, 0, <<"#{">>);
 writeTerm(Term, Depth, Width, Encoding, Strings) when is_tuple(Term) -> writeTuple(Term, Depth, Width, Encoding, Strings, 1, tuple_size(Term), 0, <<"{">>);
@@ -665,9 +712,9 @@ ctlSmall($i, _Args, _Width, _Adjust, _Precision, _PadChar, _Encoding) -> ignore;
 ctlSmall($s, Args, Width, Adjust, Precision, PadChar, Encoding) when is_atom(Args) ->
    case Encoding of
       latin1 ->
-         AtomBinStr = ?writeAtom(Args, latin1);
+         AtomBinStr = writeAtom(Args, latin1);
       _ ->
-         AtomBinStr = ?writeAtom(Args, uft8)
+         AtomBinStr = writeAtom(Args, uft8)
    end,
    string(AtomBinStr, Width, Adjust, Precision, PadChar, Encoding);
 ctlSmall(_C, _Args, _Width, _Adjust, _Precision, _PadChar, _Encoding) -> not_small.
