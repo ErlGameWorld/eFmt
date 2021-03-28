@@ -1,5 +1,9 @@
 -module(eFmt).
 
+-import(binary, [split/2, part/3]).
+-import(lists, [keyfind/3, reverse/2]).
+-import(maps, [iterator/1, next/1]).
+
 -compile(inline).
 -compile({inline_size, 128}).
 
@@ -38,6 +42,8 @@
    , getOpt/3
    , visualList/2
    , visualBin/2
+   , writeTerm/3
+   , writeTerm/5
 ]).
 
 %% ********************************************** eFmt start ***********************************************************
@@ -46,16 +52,17 @@
 -type encoding() :: epp:source_encoding() | 'unicode'.
 -type charsLimit() :: integer().
 -type fmtSpec() :: #fmtSpec{}.
+-type format() :: atom() | string() | binary().
 
--spec format(Format :: io:format(), Data :: [term()]) -> chars().
+-spec format(Format :: format(), Data :: [term()]) -> chars().
 format(Format, Args) ->
    try fWrite(Format, Args)
    catch
-      _C:_R:S ->
-         erlang:error(badarg, [Format, Args, _C, _R, S])
+      _C:_R ->
+         erlang:error(badarg, [Format, Args, _C, _R])
    end.
 
--spec format(Format :: io:format(), Data :: [term()], Options :: [{charsLimit, CharsLimit :: charsLimit()}]) -> chars().
+-spec format(Format :: format(), Data :: [term()], Options :: [{charsLimit, CharsLimit :: charsLimit()}]) -> chars().
 format(Format, Args, Options) ->
    try fWrite(Format, Args, Options)
    catch
@@ -63,15 +70,15 @@ format(Format, Args, Options) ->
          erlang:error(badarg, [Format, Args])
    end.
 
--spec formatBin(Format :: io:format(), Data :: [term()]) -> chars().
+-spec formatBin(Format :: format(), Data :: [term()]) -> chars().
 formatBin(Format, Args) ->
    try iolist_to_binary(fWrite(Format, Args))
    catch
-      _C:_R:S ->
-         erlang:error(badarg, [Format, Args, _C, _R, S])
+      _C:_R ->
+         erlang:error(badarg, [Format, Args, _C, _R])
    end.
 
--spec formatBin(Format :: io:format(), Data :: [term()], Options :: [{charsLimit, CharsLimit :: charsLimit()}]) -> chars().
+-spec formatBin(Format :: format(), Data :: [term()], Options :: [{charsLimit, CharsLimit :: charsLimit()}]) -> chars().
 formatBin(Format, Args, Options) ->
    try iolist_to_binary(fWrite(Format, Args, Options))
    catch
@@ -79,7 +86,7 @@ formatBin(Format, Args, Options) ->
          erlang:error(badarg, [Format, Args])
    end.
 
--spec scan(Format :: io:format(), Data :: [term()]) -> FormatList :: [char() | fmtSpec()].
+-spec scan(Format :: format(), Data :: [term()]) -> FormatList :: [char() | fmtSpec()].
 scan(Format, Args) ->
    try fScan(Format, Args)
    catch
@@ -115,7 +122,7 @@ write(Term, Depth) ->
 write(Term, Depth, IsPretty) ->
    case IsPretty of
       true ->
-         eFmtPretty:pPrint(Term, 1, ?LineCCnt, Depth);
+         writeTerm(Term, Depth, ?LineCCnt, latin1, true);
       _ ->
          writeTerm(Term, Depth, latin1)
    end.
@@ -129,12 +136,12 @@ write(Term, Depth, Encoding, CharsLimit) ->
          writeTerm(Term, Depth, Encoding);
       true ->
          BinTerm = writeTerm(Term, Depth, ?LineCCnt, Encoding, false),
-         BinTermSize = erlang:byte_size(BinTerm),
+         BinTermSize = byte_size(BinTerm),
          if
             CharsLimit < 0 ->
                BinTerm;
             BinTermSize > CharsLimit ->
-               <<(binary:part(BinTerm, 0, CharsLimit))/binary, "...">>;
+               <<(part(BinTerm, 0, CharsLimit))/binary, "...">>;
             true ->
                BinTerm
          end
@@ -146,12 +153,12 @@ write(Term, Depth, Width, CharsLimit, Encoding, Strings) ->
          <<"...">>;
       true ->
          BinTerm = writeTerm(Term, Depth, Width, Encoding, Strings),
-         BinTermSize = erlang:byte_size(BinTerm),
+         BinTermSize = byte_size(BinTerm),
          if
             CharsLimit < 0 ->
                BinTerm;
             BinTermSize > CharsLimit ->
-               <<(binary:part(BinTerm, 0, CharsLimit))/binary, "...">>;
+               <<(part(BinTerm, 0, CharsLimit))/binary, "...">>;
             true ->
                BinTerm
          end
@@ -159,9 +166,9 @@ write(Term, Depth, Width, CharsLimit, Encoding, Strings) ->
 
 -define(writeInt(Int), integer_to_binary(Term)).
 -define(writeFloat(Float), floatG(Term)).
--define(writePort(Port), list_to_binary(erlang:port_to_list(Port))).
--define(writeRef(Ref), list_to_binary(erlang:ref_to_list(Ref))).
--define(writePid(Ref), list_to_binary(erlang:pid_to_list(Ref))).
+-define(writePort(Port), list_to_binary(port_to_list(Port))).
+-define(writeRef(Ref), list_to_binary(ref_to_list(Ref))).
+-define(writePid(Ref), list_to_binary(pid_to_list(Ref))).
 -define(writeFun(Fun), list_to_binary(erlang:fun_to_list(Fun))).
 
 writeAtom(Atom, Encoding) ->
@@ -197,16 +204,19 @@ visualAtomChar(_) -> false.
 writeList([], _D, _E, BinAcc) ->
    <<BinAcc/binary, "]">>;
 writeList([One], D, E, BinAcc) ->
-   <<BinAcc/binary, (writeTerm(One, D, E))/binary, "]">>;
+   VBin = writeTerm(One, D, E),
+   <<BinAcc/binary, VBin/binary, "]">>;
 writeList([One | List], D, E, BinAcc) ->
    if
       D =:= 1 -> <<BinAcc, "|...]">>;
       true ->
-         writeList(List, D - 1, E, <<BinAcc/binary, (writeTerm(One, D, E))/binary, ",">>)
+         VBin = writeTerm(One, D, E),
+         writeList(List, D - 1, E, <<BinAcc/binary, VBin/binary, ",">>)
    end;
 writeList(Other, D, E, BinAcc) ->
-   NewBinAcc = binary:part(BinAcc, 0, erlang:byte_size(BinAcc) - 1),
-   <<NewBinAcc/binary, "|", (writeTerm(Other, D, E))/binary, "]">>.
+   NewBinAcc = part(BinAcc, 0, byte_size(BinAcc) - 1),
+   VBin = writeTerm(Other, D, E),
+   <<NewBinAcc/binary, "|", VBin/binary, "]">>.
 
 writeTuple(Tuple, D, E, Index, TupleSize, BinAcc) ->
    if
@@ -214,9 +224,11 @@ writeTuple(Tuple, D, E, Index, TupleSize, BinAcc) ->
       true ->
          if
             Index < TupleSize ->
-               writeTuple(Tuple, D - 1, E, Index + 1, TupleSize, <<BinAcc/binary, (writeTerm(element(Index, Tuple), D - 1, E))/binary, ",">>);
+               VBin = writeTerm(element(Index, Tuple), D - 1, E),
+               writeTuple(Tuple, D - 1, E, Index + 1, TupleSize, <<BinAcc/binary, VBin/binary, ",">>);
             Index == TupleSize ->
-               <<BinAcc/binary, (writeTerm(element(Index, Tuple), D - 1, E))/binary, "}">>;
+               VBin = writeTerm(element(Index, Tuple), D - 1, E),
+               <<BinAcc/binary, VBin/binary, "}">>;
             true ->
                <<BinAcc/binary, "}">>
          end
@@ -227,7 +239,7 @@ writeMap(Map, D, E, BinAcc) ->
       D =:= 1 ->
          <<BinAcc/binary, "...}">>;
       true ->
-         writeMapBody(maps:iterator(Map), D, E, BinAcc)
+         writeMapBody(iterator(Map), D, E, BinAcc)
    end.
 
 writeMapBody(I, D, E, BinAcc) ->
@@ -235,12 +247,16 @@ writeMapBody(I, D, E, BinAcc) ->
       D =:= 1 ->
          <<BinAcc/binary, " ...}">>;
       true ->
-         case maps:next(I) of
+         case next(I) of
             {K, V, none} ->
-               <<BinAcc/binary, (writeTerm(K, -1, E))/binary, " => ", (writeTerm(V, D, E))/binary, "}">>;
+               KeyTermBin = writeTerm(K, -1, E),
+               ValueTermBin = writeTerm(V, -1, E),
+               <<BinAcc/binary, KeyTermBin/binary, " => ", ValueTermBin/binary, "}">>;
             {K, V, NextI} ->
-               writeMapBody(NextI, D - 1, E, <<BinAcc/binary, (writeTerm(K, -1, E))/binary, " => ", (writeTerm(V, D, E))/binary, ",">>);
-            none ->
+               KeyTermBin = writeTerm(K, -1, E),
+               ValueTermBin = writeTerm(V, -1, E),
+               writeMapBody(NextI, D - 1, E, <<BinAcc/binary, KeyTermBin/binary, " => ", ValueTermBin/binary, ",">>);
+            _ ->
                <<BinAcc/binary, "}">>
          end
    end.
@@ -254,13 +270,17 @@ writeBinary(Bin, D, BinAcc) ->
             <<>> ->
                <<BinAcc/binary, ">>">>;
             <<Int:8>> ->
-               <<BinAcc/binary, (integer_to_binary(Int))/binary, ">>">>;
+               VBin = integer_to_binary(Int),
+               <<BinAcc/binary, VBin/binary, ">>">>;
             <<Int:8, LeftBin/bitstring>> ->
-               writeBinary(LeftBin, D - 1, <<BinAcc/binary, (integer_to_binary(Int))/binary, ",">>);
+               VBin = integer_to_binary(Int),
+               writeBinary(LeftBin, D - 1, <<BinAcc/binary, VBin/binary, ",">>);
             _ ->
                L = bit_size(Bin),
                <<X:L>> = Bin,
-               <<BinAcc/binary, (integer_to_binary(X))/binary, ":", (integer_to_binary(L))/binary, ">>">>
+               XBin = integer_to_binary(X),
+               LBin = integer_to_binary(L),
+               <<BinAcc/binary, XBin/binary, ":", LBin/binary, ">>">>
          end
    end.
 
@@ -281,7 +301,7 @@ writeList([], _Depth, _Width, _Encoding, _Strings, _SumLC, BinAcc) ->
    <<BinAcc/binary, "]">>;
 writeList([One], Depth, Width, Encoding, Strings, SumLC, BinAcc) ->
    TermBin = writeTerm(One, Depth, Width, Encoding, Strings),
-   TermBinBinSize = erlang:byte_size(TermBin),
+   TermBinBinSize = byte_size(TermBin),
    NewSumLC = SumLC + TermBinBinSize,
    case NewSumLC >= Width of
       true ->
@@ -295,7 +315,7 @@ writeList([One | List], Depth, Width, Encoding, Strings, SumLC, BinAcc) ->
       Depth =:= 1 -> <<BinAcc, "|...]">>;
       true ->
          TermBin = writeTerm(One, Depth, Width, Encoding, Strings),
-         TermBinBinSize = erlang:byte_size(TermBin),
+         TermBinBinSize = byte_size(TermBin),
          NewSumLC = SumLC + TermBinBinSize,
          case NewSumLC >= Width of
             true ->
@@ -306,9 +326,9 @@ writeList([One | List], Depth, Width, Encoding, Strings, SumLC, BinAcc) ->
    end;
 writeList(Other, Depth, Width, Encoding, Strings, SumLC, BinAcc) ->
    TermBin = writeTerm(Other, Depth, Width, Encoding, Strings),
-   TermBinBinSize = erlang:byte_size(TermBin),
+   TermBinBinSize = byte_size(TermBin),
    NewSumLC = SumLC + TermBinBinSize,
-   NewBinAcc = binary:part(BinAcc, 0, erlang:byte_size(BinAcc) - 1),
+   NewBinAcc = part(BinAcc, 0, byte_size(BinAcc) - 1),
    case NewSumLC >= Width of
       true ->
          <<NewBinAcc/binary, "|", TermBin/binary, "]\n">>;
@@ -323,7 +343,7 @@ writeTuple(Tuple, Depth, Width, Encoding, Strings, Index, TupleSize, SumLC, BinA
          if
             Index < TupleSize ->
                TermBin = writeTerm(element(Index, Tuple), Depth, Width, Encoding, Strings),
-               TermBinBinSize = erlang:byte_size(TermBin),
+               TermBinBinSize = byte_size(TermBin),
                NewSumLC = SumLC + TermBinBinSize,
                case NewSumLC >= Width of
                   true ->
@@ -333,7 +353,7 @@ writeTuple(Tuple, Depth, Width, Encoding, Strings, Index, TupleSize, SumLC, BinA
                end;
             Index == TupleSize ->
                TermBin = writeTerm(element(Index, Tuple), Depth, Width, Encoding, Strings),
-               TermBinBinSize = erlang:byte_size(TermBin),
+               TermBinBinSize = byte_size(TermBin),
                NewSumLC = SumLC + TermBinBinSize,
                case NewSumLC >= Width of
                   true ->
@@ -351,7 +371,7 @@ writeMap(Map, Depth, Width, Encoding, Strings, SumLC, BinAcc) ->
       Depth =:= 1 ->
          <<BinAcc/binary, "...}">>;
       true ->
-         writeMapBody(maps:iterator(Map), Depth, Width, Encoding, Strings, SumLC, BinAcc)
+         writeMapBody(iterator(Map), Depth, Width, Encoding, Strings, SumLC, BinAcc)
    end.
 
 writeMapBody(I, Depth, Width, Encoding, Strings, SumLC, BinAcc) ->
@@ -359,11 +379,11 @@ writeMapBody(I, Depth, Width, Encoding, Strings, SumLC, BinAcc) ->
       Depth =:= 1 ->
          <<BinAcc/binary, " ...}">>;
       true ->
-         case maps:next(I) of
+         case next(I) of
             {K, V, none} ->
                KeyTermBin = writeTerm(K, -1, Width, Encoding, Strings),
                ValueTermBin = writeTerm(V, -1, Width, Encoding, Strings),
-               TermBinBinSize = erlang:byte_size(KeyTermBin) + erlang:byte_size(ValueTermBin),
+               TermBinBinSize = byte_size(KeyTermBin) + byte_size(ValueTermBin),
                NewSumLC = SumLC + TermBinBinSize,
                case NewSumLC >= Width of
                   true ->
@@ -374,7 +394,7 @@ writeMapBody(I, Depth, Width, Encoding, Strings, SumLC, BinAcc) ->
             {K, V, NextI} ->
                KeyTermBin = writeTerm(K, -1, Width, Encoding, Strings),
                ValueTermBin = writeTerm(V, -1, Width, Encoding, Strings),
-               TermBinBinSize = erlang:byte_size(KeyTermBin) + erlang:byte_size(ValueTermBin),
+               TermBinBinSize = byte_size(KeyTermBin) + byte_size(ValueTermBin),
                NewSumLC = SumLC + TermBinBinSize,
                case NewSumLC >= Width of
                   true ->
@@ -382,7 +402,7 @@ writeMapBody(I, Depth, Width, Encoding, Strings, SumLC, BinAcc) ->
                   _ ->
                      writeMapBody(NextI, Depth - 1, Width, Encoding, Strings, NewSumLC, <<BinAcc/binary, KeyTermBin/binary, " => ", ValueTermBin/binary, ",">>)
                end;
-            none ->
+            _ ->
                <<BinAcc/binary, "}">>
          end
    end.
@@ -409,7 +429,7 @@ writeBinary(Bin, Depth, Width, Encoding, Strings, SumLC, BinAcc) ->
                <<BinAcc/binary, (integer_to_binary(Int))/binary, ">>">>;
             <<Int:8, LeftBin/bitstring>> ->
                TermBin = integer_to_binary(Int),
-               TermBinBinSize = erlang:byte_size(TermBin),
+               TermBinBinSize = byte_size(TermBin),
                NewSumLC = SumLC + TermBinBinSize,
                case NewSumLC >= Width of
                   true ->
@@ -444,9 +464,12 @@ writeTerm(_Term, Depth, _Width, _Encoding, _Strings) when Depth == 0 -> <<"...">
 writeTerm(Term, _Depth, _Width, _Encoding, _Strings) when is_integer(Term) -> ?writeInt(Term);
 writeTerm(Term, _Depth, _Width, Encoding, _Strings) when is_atom(Term) -> writeAtom(Term, Encoding);
 writeTerm(Term, Depth, Width, Encoding, Strings) when is_list(Term) -> writeList(Term, Depth, Width, Encoding, Strings);
-writeTerm(Term, Depth, Width, Encoding, Strings) when is_map(Term) -> writeMap(Term, Depth, Width, Encoding, Strings, 0, <<"#{">>);
-writeTerm(Term, Depth, Width, Encoding, Strings) when is_tuple(Term) -> writeTuple(Term, Depth, Width, Encoding, Strings, 1, tuple_size(Term), 0, <<"{">>);
-writeTerm(Term, Depth, Width, Encoding, Strings) when is_bitstring(Term) -> writeBinary(Term, Depth, Width, Encoding, Strings);
+writeTerm(Term, Depth, Width, Encoding, Strings) when is_map(Term) ->
+   writeMap(Term, Depth, Width, Encoding, Strings, 0, <<"#{">>);
+writeTerm(Term, Depth, Width, Encoding, Strings) when is_tuple(Term) ->
+   writeTuple(Term, Depth, Width, Encoding, Strings, 1, tuple_size(Term), 0, <<"{">>);
+writeTerm(Term, Depth, Width, Encoding, Strings) when is_bitstring(Term) ->
+   writeBinary(Term, Depth, Width, Encoding, Strings);
 writeTerm(Term, _Depth, _Width, _Encoding, _Strings) when is_pid(Term) -> ?writePid(Term);
 writeTerm(Term, _Depth, _Width, _Encoding, _Strings) when is_float(Term) -> ?writeFloat(Term);
 writeTerm(Term, _Depth, _Width, _Encoding, _Strings) when is_port(Term) -> ?writePort(Term);
@@ -456,17 +479,17 @@ writeTerm(Term, _Depth, _Width, _Encoding, _Strings) when is_function(Term) -> ?
 
 %% ********************************************** eFmt end *************************************************************
 %% ********************************************** eFmtFormat start *****************************************************
--spec fWrite(Format :: io:format(), Data :: [term()]) -> chars().
+-spec fWrite(Format :: format(), Data :: [term()]) -> chars().
 fWrite(Format, Args) ->
    fBuild(fScan(Format, Args), []).
 
--spec fWrite(Format :: io:format(), Data :: [term()], Options :: [{'chars_limit', CharsLimit :: integer()}]) -> chars().
+-spec fWrite(Format :: format(), Data :: [term()], Options :: [{'chars_limit', CharsLimit :: integer()}]) -> chars().
 fWrite(Format, Args, Options) ->
    fBuild(fScan(Format, Args), Options).
 
 %% 格式 ~F.P.PadModC
 %% Parse all control sequences in the format string.
--spec fScan(Format :: io:format(), Data :: [term()]) -> FormatList :: [char() | fmtSpec()].
+-spec fScan(Format :: format(), Data :: [term()]) -> FormatList :: [char() | fmtSpec()].
 fScan(Format, Args) ->
    if
       is_binary(Format) ->
@@ -480,7 +503,7 @@ fScan(Format, Args) ->
    end.
 
 doCollect(FmtBinStr, Args, Acc) ->
-   case binary:split(FmtBinStr, <<"~">>) of
+   case split(FmtBinStr, <<"~">>) of
       [NotMatch] ->
          true = [] == Args,
          ?IIF(NotMatch == <<>>, Acc, [NotMatch | Acc]);
@@ -615,14 +638,14 @@ buildSmall([], CharsLimit, P, S, W, Other, Acc) ->
          case buildLimited(Acc, P, NumOfLimited, RemainChars, 0, []) of
             [] ->
                [];
-            [_One] = Ret  ->
+            [_One] = Ret ->
                Ret;
             [One, Two] ->
                [Two, One];
             [One, Two, Three] ->
                [Three, Two, One];
             Ret ->
-               lists:reverse(Ret)
+               reverse(Ret, [])
          end
    end;
 buildSmall([OneCA | Cs], CharsLimit, P, S, W, Other, Acc) ->
@@ -742,7 +765,7 @@ buildLimited([OneCA | Cs], NumOfPs, Count, MaxLen, I, Acc) ->
 ctlLimited($s, Args, Width, Adjust, Precision, PadChar, Encoding, _Strings, CharsLimit, _I) ->
    case Encoding of
       latin1 ->
-         BinStr = erlang:iolist_to_binary(Args);
+         BinStr = iolist_to_binary(Args);
       _ ->
          BinStr =
             case catch unicode:characters_to_binary(Args, unicode) of
@@ -769,7 +792,7 @@ term(BinStrOrIoList, Width, Adjust, Precision, PadChar) ->
          BinStrOrIoList;
       Width == none ->
          StrLen = charsLen(BinStrOrIoList),
-         NewPrecision = erlang:min(StrLen, Precision),
+         NewPrecision = min(StrLen, Precision),
          if
             StrLen > NewPrecision ->
                adjust(Adjust, makePadChars($*, NewPrecision, <<>>), <<>>);
@@ -778,7 +801,7 @@ term(BinStrOrIoList, Width, Adjust, Precision, PadChar) ->
          end;
       true ->
          StrLen = charsLen(BinStrOrIoList),
-         NewPrecision = erlang:min(StrLen, case Precision of none -> Width; _ -> min(Precision, Width) end),
+         NewPrecision = min(StrLen, case Precision of none -> Width; _ -> min(Precision, Width) end),
          if
             StrLen > NewPrecision ->
                adjust(Adjust, makePadChars($*, NewPrecision, <<>>), makePadChars(PadChar, Width - NewPrecision, <<>>));
@@ -826,12 +849,12 @@ strToChars(BinStr, Width, CharsLimit) ->
             true ->
                BinStr;
             _ ->
-               <<(binary:part(BinStr, 0, CharsLimit))/binary, "...">>
+               <<(part(BinStr, 0, CharsLimit))/binary, "...">>
          end;
       CharsLimit < 0 orelse CharsLimit >= Width ->
          BinStr;
       true ->
-         <<(binary:part(BinStr, 0, CharsLimit))/binary, "...">>
+         <<(part(BinStr, 0, CharsLimit))/binary, "...">>
    end.
 
 string(Str, Width, Adjust, Precision, PadChar, Encoding) ->
@@ -870,7 +893,7 @@ strField(Str, Width, Adjust, StrLen, PadChar, Encoding) when StrLen > Width ->
    end.
 
 flatTrunc(List, Width, _Encoding) ->
-   binary:part(iolist_to_binary(List), 0, Width).
+   part(iolist_to_binary(List), 0, Width).
 
 makePadChars(PadChar, Cnt, BinStr) ->
    case Cnt > 0 of
@@ -991,7 +1014,7 @@ charsLen(S) ->
    end.
 
 getOpt(Key, TupleList, Default) ->
-   case lists:keyfind(Key, 1, TupleList) of
+   case keyfind(Key, 1, TupleList) of
       false ->
          Default;
       ValueTuple ->
