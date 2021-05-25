@@ -9,6 +9,8 @@
 
 -include("eFmt.hrl").
 
+-on_load(on_load/0).
+
 -export([
    %% eFmt
    format/2
@@ -53,6 +55,16 @@
 -type charsLimit() :: integer().
 -type fmtSpec() :: #fmtSpec{}.
 -type format() :: atom() | string() | binary().
+
+on_load() ->
+   ?log(on_load),
+   case persistent_term:get(?eFmtPtMc, undefined) of
+      undefined ->
+         persistent_term:put(?eFmtPtMc, binary:compile_pattern(<<"~">>));
+      _ ->
+         ignore
+   end,
+   ok.
 
 -spec format(Format :: format(), Data :: [term()]) -> chars().
 format(Format, Args) ->
@@ -503,7 +515,7 @@ fScan(Format, Args) ->
    end.
 
 doCollect(FmtBinStr, Args, Acc) ->
-   case split(FmtBinStr, <<"~">>) of
+   case split(FmtBinStr, persistent_term:get(?eFmtPtMc)) of
       [NotMatch] ->
          true = [] == Args,
          ?IIF(NotMatch == <<>>, Acc, [NotMatch | Acc]);

@@ -1,6 +1,8 @@
 %% pretty 模式下 每行打印的字符数
 -define(LineCCnt, 120).
 
+-define(eFmtPtMc, '$eFmtPtMc').
+
 -define(base(Precision), case Precision of none -> 10; _ -> Precision end).
 %% 三元表达式
 -define(IIF(Cond, Ret1, Ret2), (case Cond of true -> Ret1; _ -> Ret2 end)).
