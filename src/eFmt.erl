@@ -220,7 +220,7 @@ writeList([One], D, E, BinAcc) ->
    <<BinAcc/binary, VBin/binary, "]">>;
 writeList([One | List], D, E, BinAcc) ->
    if
-      D =:= 1 -> <<BinAcc, "|...]">>;
+      D =:= 1 -> <<BinAcc/binary, "|...]">>;
       true ->
          VBin = writeTerm(One, D, E),
          writeList(List, D - 1, E, <<BinAcc/binary, VBin/binary, ",">>)
@@ -324,7 +324,7 @@ writeList([One], Depth, Width, Encoding, Strings, SumLC, BinAcc) ->
    end;
 writeList([One | List], Depth, Width, Encoding, Strings, SumLC, BinAcc) ->
    if
-      Depth =:= 1 -> <<BinAcc, "|...]">>;
+      Depth =:= 1 -> <<BinAcc/binary, "|...]">>;
       true ->
          TermBin = writeTerm(One, Depth, Width, Encoding, Strings),
          TermBinBinSize = byte_size(TermBin),
@@ -792,10 +792,10 @@ ctlLimited($w, Args, Width, Adjust, Precision, PadChar, Encoding, _Strings, Char
    term(Chars, Width, Adjust, Precision, PadChar);
 ctlLimited($p, Args, Width, _Adjust, _Precision, _PadChar, Encoding, Strings, CharsLimit, _I) ->
    write(Args, -1, ?IIF(Width == none, ?LineCCnt, Width), CharsLimit, Encoding, Strings);
-ctlLimited($W, [Args, Depth], Width, Adjust, Precision, PadChar, Encoding, _Strings, CharsLimit, _I) ->
+ctlLimited($W, {Args, Depth}, Width, Adjust, Precision, PadChar, Encoding, _Strings, CharsLimit, _I) ->
    Chars = write(Args, Depth, Encoding, CharsLimit),
    term(Chars, Width, Adjust, Precision, PadChar);
-ctlLimited($P, [Args, Depth], Width, _Adjust, _Precision, _PadChar, Encoding, Strings, CharsLimit, _I) ->
+ctlLimited($P, {Args, Depth}, Width, _Adjust, _Precision, _PadChar, Encoding, Strings, CharsLimit, _I) ->
    write(Args, Depth, ?IIF(Width == none, ?LineCCnt, Width), CharsLimit, Encoding, Strings).
 
 term(BinStrOrIoList, Width, Adjust, Precision, PadChar) ->
