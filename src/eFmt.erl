@@ -57,7 +57,6 @@
 -type format() :: atom() | string() | binary().
 
 on_load() ->
-   ?log(on_load),
    case persistent_term:get(?eFmtPtMc, undefined) of
       undefined ->
          persistent_term:put(?eFmtPtMc, binary:compile_pattern(<<"~">>));
