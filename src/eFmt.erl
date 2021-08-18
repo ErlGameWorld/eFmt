@@ -83,7 +83,9 @@ format(Format, Args, Options) ->
 
 -spec formatBin(Format :: format(), Data :: [term()]) -> chars().
 formatBin(Format, Args) ->
-   try iolist_to_binary(fWrite(Format, Args))
+   try fWrite(Format, Args) of
+      Ret ->
+         iolist_to_binary(Ret)
    catch
       _C:_R ->
          erlang:error(badarg, [Format, Args, _C, _R])
@@ -91,7 +93,9 @@ formatBin(Format, Args) ->
 
 -spec formatBin(Format :: format(), Data :: [term()], Options :: [{charsLimit, CharsLimit :: charsLimit()}]) -> chars().
 formatBin(Format, Args, Options) ->
-   try iolist_to_binary(fWrite(Format, Args, Options))
+   try fWrite(Format, Args, Options) of
+      Ret ->
+         iolist_to_binary(Ret)
    catch
       _C:_R ->
          erlang:error(badarg, [Format, Args])
@@ -494,7 +498,7 @@ writeTerm(Term, _Depth, _Width, _Encoding, _Strings) when is_function(Term) -> ?
 fWrite(Format, Args) ->
    fBuild(fScan(Format, Args), []).
 
--spec fWrite(Format :: format(), Data :: [term()], Options :: [{'chars_limit', CharsLimit :: integer()}]) -> chars().
+-spec fWrite(Format :: format(), Data :: [term()], Options :: [{charsLimit, CharsLimit :: integer()}]) -> chars().
 fWrite(Format, Args, Options) ->
    fBuild(fScan(Format, Args), Options).
 
@@ -634,9 +638,9 @@ doCollCA(LPart, Args, Width, Adjust, Precision, PadChar, Encoding, Strings, Acc)
 fBuild(Cs) ->
    fBuild(Cs, []).
 
--spec fBuild(FormatList :: [char() | fmtSpec()], Options :: [{'chars_limit', CharsLimit :: integer()}]) -> chars().
+-spec fBuild(FormatList :: [char() | fmtSpec()], Options :: [{charsLimit, CharsLimit :: integer()}]) -> chars().
 fBuild(Cs, Options) ->
-   CharsLimit = getOpt(chars_limit, Options, -1),
+   CharsLimit = getOpt(charsLimit, Options, -1),
    buildSmall(Cs, CharsLimit, 0, 0, 0, 0, []).
 
 buildSmall([], CharsLimit, P, S, W, Other, Acc) ->
