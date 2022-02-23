@@ -78,7 +78,7 @@ format(Format, Args, Options) ->
    try fWrite(Format, Args, Options)
    catch
       _C:_R ->
-         erlang:error(badarg, [Format, Args])
+         erlang:error(badarg, [Format, Args, _C, _R])
    end.
 
 -spec formatBin(Format :: format(), Data :: [term()]) -> chars().
