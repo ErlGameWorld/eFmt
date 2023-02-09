@@ -7,7 +7,26 @@
 -compile(inline).
 -compile({inline_size, 128}).
 
--include("eFmt.hrl").
+%% pretty 模式下 每行打印的字符数
+-define(LineCCnt, 120).
+
+-define(eFmtPtMc, '$eFmtPtMc').
+
+-define(base(Precision), case Precision of none -> 10; _ -> Precision end).
+%% 三元表达式
+-define(IIF(Cond, Ret1, Ret2), (case Cond of true -> Ret1; _ -> Ret2 end)).
+
+-record(fmtSpec, {
+   ctlChar :: char()                         %% 控制序列的类型  $p $w
+   , args :: [any()]                         %% 是控制序列使用的参数的列表，如果控制序列不带任何参数，则为空列表。
+   , width :: 'none' | integer()             %% 字段宽度
+   , adjust :: 'left' | 'right'              %% 对齐方式
+   , precision :: 'none' | integer()         %% 打印参数的精度
+   , padChar :: char()                       %% 填充字符
+   , encoding :: 'unicode' | 'latin1'        %% 如果存在翻译修饰符t，则编码设置为true
+   , strings :: boolean()                    %% 如果存在修饰符l，则将 string设置为false。
+}).
+
 
 -on_load(on_load/0).
 
@@ -16,8 +35,8 @@
    format/2
    , format/3
 
-   , formatBin/2
-   , formatBin/3
+   , formatIol/2
+   , formatIol/3
 
    , scan/2
    , build/1
@@ -67,62 +86,58 @@ on_load() ->
 
 -spec format(Format :: format(), Data :: [term()]) -> chars().
 format(Format, Args) ->
-   try fWrite(Format, Args)
+   try iolist_to_binary(fWrite(Format, Args))
    catch
-      _C:_R ->
-         erlang:error(badarg, [Format, Args, _C, _R])
+      C:R:S ->
+         erlang:error(badarg, [Format, Args, {C, R, S}])
    end.
 
 -spec format(Format :: format(), Data :: [term()], Options :: [{charsLimit, CharsLimit :: charsLimit()}]) -> chars().
 format(Format, Args, Options) ->
+   try iolist_to_binary(fWrite(Format, Args, Options))
+   catch
+      C:R:S ->
+         erlang:error(badarg, [Format, Args, {C, R, S}])
+   end.
+
+-spec formatIol(Format :: format(), Data :: [term()]) -> chars().
+formatIol(Format, Args) ->
+   try fWrite(Format, Args)
+   catch
+      C:R:S ->
+         erlang:error(badarg, [Format, Args, {C, R, S}])
+   end.
+
+-spec formatIol(Format :: format(), Data :: [term()], Options :: [{charsLimit, CharsLimit :: charsLimit()}]) -> chars().
+formatIol(Format, Args, Options) ->
    try fWrite(Format, Args, Options)
    catch
-      _C:_R ->
-         erlang:error(badarg, [Format, Args, _C, _R])
-   end.
-
--spec formatBin(Format :: format(), Data :: [term()]) -> chars().
-formatBin(Format, Args) ->
-   try fWrite(Format, Args) of
-      Ret ->
-         iolist_to_binary(Ret)
-   catch
-      _C:_R ->
-         erlang:error(badarg, [Format, Args, _C, _R])
-   end.
-
--spec formatBin(Format :: format(), Data :: [term()], Options :: [{charsLimit, CharsLimit :: charsLimit()}]) -> chars().
-formatBin(Format, Args, Options) ->
-   try fWrite(Format, Args, Options) of
-      Ret ->
-         iolist_to_binary(Ret)
-   catch
-      _C:_R ->
-         erlang:error(badarg, [Format, Args])
+      C:R:S ->
+         erlang:error(badarg, [Format, Args, {C, R, S}])
    end.
 
 -spec scan(Format :: format(), Data :: [term()]) -> FormatList :: [char() | fmtSpec()].
 scan(Format, Args) ->
    try fScan(Format, Args)
    catch
-      _C:_R ->
-         erlang:error(badarg, [Format, Args])
+      C:R:S ->
+         erlang:error(badarg, [Format, Args, {C, R, S}])
    end.
 
 -spec build(FormatList :: [char() | fmtSpec()]) -> chars().
 build(FormatList) ->
    try fBuild(FormatList)
    catch
-      _C:_R ->
-         erlang:error(badarg, [FormatList])
+      C:R:S ->
+         erlang:error(badarg, [FormatList, {C, R, S}])
    end.
 
 -spec build(FormatList :: [char() | fmtSpec()], Options :: [{charsLimit, CharsLimit :: charsLimit()}]) -> chars().
 build(FormatList, Options) ->
    try fBuild(FormatList, Options)
    catch
-      _C:_R ->
-         erlang:error(badarg, [FormatList, Options])
+      C:R:S ->
+         erlang:error(badarg, [FormatList, Options, {C, R, S}])
    end.
 
 -spec write(Term :: term()) -> chars().
@@ -142,6 +157,17 @@ write(Term, Depth, IsPretty) ->
          writeTerm(Term, Depth, latin1)
    end.
 
+splitPart(Term)when is_map(Term) ->
+   <<"...}">>;
+splitPart(Term)when is_tuple(Term) ->
+   <<"...}">>;
+splitPart(Term)when is_list(Term) ->
+   <<"...]">>;
+splitPart(Term) when is_binary(Term) ->
+   <<"...>>">>;
+splitPart(_Term) ->
+   <<"...">>.
+
 -spec write(Term :: term(), Depth :: depth(), Encoding :: encoding(), CharsLimit :: charsLimit()) -> chars().
 write(Term, Depth, Encoding, CharsLimit) ->
    if
@@ -150,13 +176,13 @@ write(Term, Depth, Encoding, CharsLimit) ->
       CharsLimit < 0 ->
          writeTerm(Term, Depth, Encoding);
       true ->
-         BinTerm = writeTerm(Term, Depth, ?LineCCnt, Encoding, false),
+         BinTerm = writeTerm(Term, Depth, Encoding),
          BinTermSize = byte_size(BinTerm),
          if
             CharsLimit < 0 ->
                BinTerm;
             BinTermSize > CharsLimit ->
-               <<(part(BinTerm, 0, CharsLimit))/binary, "...">>;
+               <<(part(BinTerm, 0, CharsLimit))/binary, (splitPart(Term))/binary>>;
             true ->
                BinTerm
          end
@@ -173,7 +199,7 @@ write(Term, Depth, Width, CharsLimit, Encoding, Strings) ->
             CharsLimit < 0 ->
                BinTerm;
             BinTermSize > CharsLimit ->
-               <<(part(BinTerm, 0, CharsLimit))/binary, "...">>;
+               <<(part(BinTerm, 0, CharsLimit))/binary, (splitPart(Term))/binary>>;
             true ->
                BinTerm
          end
@@ -318,7 +344,7 @@ writeList([One], Depth, Width, Encoding, Strings, SumLC, BinAcc) ->
    TermBin = writeTerm(One, Depth, Width, Encoding, Strings),
    TermBinBinSize = byte_size(TermBin),
    NewSumLC = SumLC + TermBinBinSize,
-   case NewSumLC >= Width of
+   case Width /= 0 andalso NewSumLC >= Width of
       true ->
          <<BinAcc/binary, TermBin/binary, "]\n">>;
       _ ->
@@ -332,7 +358,7 @@ writeList([One | List], Depth, Width, Encoding, Strings, SumLC, BinAcc) ->
          TermBin = writeTerm(One, Depth, Width, Encoding, Strings),
          TermBinBinSize = byte_size(TermBin),
          NewSumLC = SumLC + TermBinBinSize,
-         case NewSumLC >= Width of
+         case Width /= 0 andalso NewSumLC >= Width of
             true ->
                writeList(List, Depth - 1, Width, Encoding, Strings, 0, <<BinAcc/binary, TermBin/binary, ",\n">>);
             _ ->
@@ -344,7 +370,7 @@ writeList(Other, Depth, Width, Encoding, Strings, SumLC, BinAcc) ->
    TermBinBinSize = byte_size(TermBin),
    NewSumLC = SumLC + TermBinBinSize,
    NewBinAcc = part(BinAcc, 0, byte_size(BinAcc) - 1),
-   case NewSumLC >= Width of
+   case Width /= 0 andalso NewSumLC >= Width of
       true ->
          <<NewBinAcc/binary, "|", TermBin/binary, "]\n">>;
       _ ->
@@ -360,7 +386,7 @@ writeTuple(Tuple, Depth, Width, Encoding, Strings, Index, TupleSize, SumLC, BinA
                TermBin = writeTerm(element(Index, Tuple), Depth, Width, Encoding, Strings),
                TermBinBinSize = byte_size(TermBin),
                NewSumLC = SumLC + TermBinBinSize,
-               case NewSumLC >= Width of
+               case Width /= 0 andalso NewSumLC >= Width of
                   true ->
                      writeTuple(Tuple, Depth - 1, Width, Encoding, Strings, Index + 1, TupleSize, 0, <<BinAcc/binary, TermBin/binary, ",\n">>);
                   _ ->
@@ -370,7 +396,7 @@ writeTuple(Tuple, Depth, Width, Encoding, Strings, Index, TupleSize, SumLC, BinA
                TermBin = writeTerm(element(Index, Tuple), Depth, Width, Encoding, Strings),
                TermBinBinSize = byte_size(TermBin),
                NewSumLC = SumLC + TermBinBinSize,
-               case NewSumLC >= Width of
+               case Width /= 0 andalso NewSumLC >= Width of
                   true ->
                      <<BinAcc/binary, TermBin/binary, "}\n">>;
                   _ ->
@@ -400,7 +426,7 @@ writeMapBody(I, Depth, Width, Encoding, Strings, SumLC, BinAcc) ->
                ValueTermBin = writeTerm(V, -1, Width, Encoding, Strings),
                TermBinBinSize = byte_size(KeyTermBin) + byte_size(ValueTermBin),
                NewSumLC = SumLC + TermBinBinSize,
-               case NewSumLC >= Width of
+               case Width /= 0 andalso NewSumLC >= Width of
                   true ->
                      <<BinAcc/binary, KeyTermBin/binary, " => ", ValueTermBin/binary, "}\n">>;
                   _ ->
@@ -411,7 +437,7 @@ writeMapBody(I, Depth, Width, Encoding, Strings, SumLC, BinAcc) ->
                ValueTermBin = writeTerm(V, -1, Width, Encoding, Strings),
                TermBinBinSize = byte_size(KeyTermBin) + byte_size(ValueTermBin),
                NewSumLC = SumLC + TermBinBinSize,
-               case NewSumLC >= Width of
+               case Width /= 0 andalso NewSumLC >= Width of
                   true ->
                      writeMapBody(NextI, Depth - 1, Width, Encoding, Strings, 0, <<BinAcc/binary, KeyTermBin/binary, " => ", ValueTermBin/binary, ",\n">>);
                   _ ->
@@ -446,7 +472,7 @@ writeBinary(Bin, Depth, Width, Encoding, Strings, SumLC, BinAcc) ->
                TermBin = integer_to_binary(Int),
                TermBinBinSize = byte_size(TermBin),
                NewSumLC = SumLC + TermBinBinSize,
-               case NewSumLC >= Width of
+               case Width /= 0 andalso NewSumLC >= Width of
                   true ->
                      writeBinary(LeftBin, Depth - 1, Width, Encoding, Strings, 0, <<BinAcc/binary, TermBin/binary, ",\n">>);
                   _ ->
@@ -523,7 +549,7 @@ doCollect(FmtBinStr, Args, Acc) ->
          true = [] == Args,
          ?IIF(NotMatch == <<>>, Acc, [NotMatch | Acc]);
       [FPart, LPart] ->
-         doCollWidth(LPart, Args, 0, right, ?IIF(FPart == <<>>, Acc, [FPart | Acc]))
+         doCollWidth(LPart, Args, none, right, ?IIF(FPart == <<>>, Acc, [FPart | Acc]))
    end.
 
 doCollWidth(<<>>, _Args, _Width, _Adjust, Acc) ->
@@ -532,23 +558,41 @@ doCollWidth(LPart, Args, Width, Adjust, Acc) ->
    case LPart of
       <<"-*", LeftLPart/binary>> ->
          [WidthArgs | LeftArgs] = Args,
-         doCollPrecision(LeftLPart, LeftArgs, WidthArgs, left, Acc);
+         if
+            WidthArgs == 0 ->
+               NewWidth = WidthArgs,
+               NewAdjust = left;
+            WidthArgs < 0 ->
+               NewWidth = -WidthArgs,
+               NewAdjust = right;
+            true ->
+               NewWidth = WidthArgs,
+               NewAdjust = left
+         end,
+         doCollPrecision(LeftLPart, LeftArgs, NewWidth, NewAdjust, Acc);
       <<"-", LeftLPart/binary>> ->
          doCollWidth(LeftLPart, Args, Width, left, Acc);
       <<"*", LeftLPart/binary>> ->
          [WidthArgs | LeftArgs] = Args,
-         doCollPrecision(LeftLPart, LeftArgs, WidthArgs, right, Acc);
+         if
+            WidthArgs == 0 ->
+               NewWidth = WidthArgs,
+               NewAdjust = left;
+            WidthArgs < 0 ->
+               NewWidth = -WidthArgs,
+               NewAdjust = left;
+            true ->
+               NewWidth = WidthArgs,
+               NewAdjust = right
+         end,
+         doCollPrecision(LeftLPart, LeftArgs, NewWidth, NewAdjust, Acc);
       <<WidthInt:8/integer, LeftLPart/binary>> ->
          case WidthInt >= $0 andalso WidthInt =< $9 of
             true ->
-               doCollWidth(LeftLPart, Args, 10 * Width + (WidthInt - $0), Adjust, Acc);
+               NewWidth = ?IIF(Width == none, WidthInt - $0, 10 * Width + (WidthInt - $0)),
+               doCollWidth(LeftLPart, Args, NewWidth, Adjust, Acc);
             _ ->
-               case Width == 0 of
-                  true ->
-                     doCollPrecision(LPart, Args, none, left, Acc);
-                  _ ->
-                     doCollPrecision(LPart, Args, Width, Adjust, Acc)
-               end
+               doCollPrecision(LPart, Args, Width, Adjust, Acc)
          end
    end.
 
@@ -564,7 +608,8 @@ doCollPrecision(LPart, Args, Width, Adjust, Precision, Acc) ->
    case LPart of
       <<"*", LeftLPart/binary>> ->
          [PrecisionArgs | LeftArgs] = Args,
-         doCollPadChar(LeftLPart, LeftArgs, Width, Adjust, PrecisionArgs, Acc);
+         NewPrecision = ?IIF(PrecisionArgs == 0, none, PrecisionArgs),
+         doCollPadChar(LeftLPart, LeftArgs, Width, Adjust, NewPrecision, Acc);
       <<PrecisionInt:8/integer, LeftLPart/binary>> ->
          case PrecisionInt >= $0 andalso PrecisionInt =< $9 of
             true ->
@@ -1081,8 +1126,7 @@ visualUtf8Char($\v, _) -> true;
 visualUtf8Char($\b, _) -> true;
 visualUtf8Char($\f, _) -> true;
 visualUtf8Char($\e, _) -> true;
-visualUtf8Char(C, _Encoding) ->
-   C >= $\s andalso C =< $~ orelse C >= 16#A0 andalso C < 16#D800 orelse C > 16#DFFF andalso C < 16#FFFE orelse C > 16#FFFF andalso C =< 16#10FFFF.
+visualUtf8Char(C, _Encoding) -> C >= $\s andalso C =< $~ orelse C >= 16#A0 andalso C < 16#D800 orelse C > 16#DFFF andalso C < 16#FFFE orelse C > 16#FFFF andalso C =< 16#10FFFF.
 %% case Encoding of
 %%    latin1 ->
 %%       C >= $\s andalso C =< $~ orelse C >= 16#A0 andalso C =< 16#FF;
