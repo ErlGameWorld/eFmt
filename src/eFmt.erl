@@ -14,7 +14,7 @@
 
 -define(base(Precision), case Precision of none -> 10; _ -> Precision end).
 %% 三元表达式
--define(IIF(Cond, Ret1, Ret2), (case Cond of true -> Ret1; _ -> Ret2 end)).
+-define(CASE(Cond, Ret1, Ret2), (case Cond of true -> Ret1; _ -> Ret2 end)).
 
 -record(fmtSpec, {
    ctlChar :: char()                         %% 控制序列的类型  $p $w
@@ -229,7 +229,7 @@ isQuoteAtom(Atom, AtomBin) ->
    end.
 
 visualAtomBin(<<>>) -> false;
-visualAtomBin(<<C/utf8, Left/binary>>) -> ?IIF(visualAtomChar(C), visualAtomBin(Left), true);
+visualAtomBin(<<C/utf8, Left/binary>>) -> ?CASE(visualAtomChar(C), visualAtomBin(Left), true);
 visualAtomBin(_) -> true.
 
 visualAtomChar(C) when C >= $a, C =< $z -> true;
@@ -547,9 +547,9 @@ doCollect(FmtBinStr, Args, Acc) ->
    case split(FmtBinStr, persistent_term:get(?eFmtPtMc)) of
       [NotMatch] ->
          true = [] == Args,
-         ?IIF(NotMatch == <<>>, Acc, [NotMatch | Acc]);
+         ?CASE(NotMatch == <<>>, Acc, [NotMatch | Acc]);
       [FPart, LPart] ->
-         doCollWidth(LPart, Args, none, right, ?IIF(FPart == <<>>, Acc, [FPart | Acc]))
+         doCollWidth(LPart, Args, none, right, ?CASE(FPart == <<>>, Acc, [FPart | Acc]))
    end.
 
 doCollWidth(<<>>, _Args, _Width, _Adjust, Acc) ->
@@ -589,7 +589,7 @@ doCollWidth(LPart, Args, Width, Adjust, Acc) ->
       <<WidthInt:8/integer, LeftLPart/binary>> ->
          case WidthInt >= $0 andalso WidthInt =< $9 of
             true ->
-               NewWidth = ?IIF(Width == none, WidthInt - $0, 10 * Width + (WidthInt - $0)),
+               NewWidth = ?CASE(Width == none, WidthInt - $0, 10 * Width + (WidthInt - $0)),
                doCollWidth(LeftLPart, Args, NewWidth, Adjust, Acc);
             _ ->
                doCollPrecision(LPart, Args, Width, Adjust, Acc)
@@ -608,7 +608,7 @@ doCollPrecision(LPart, Args, Width, Adjust, Precision, Acc) ->
    case LPart of
       <<"*", LeftLPart/binary>> ->
          [PrecisionArgs | LeftArgs] = Args,
-         NewPrecision = ?IIF(PrecisionArgs == 0, none, PrecisionArgs),
+         NewPrecision = ?CASE(PrecisionArgs == 0, none, PrecisionArgs),
          doCollPadChar(LeftLPart, LeftArgs, Width, Adjust, NewPrecision, Acc);
       <<PrecisionInt:8/integer, LeftLPart/binary>> ->
          case PrecisionInt >= $0 andalso PrecisionInt =< $9 of
@@ -628,30 +628,37 @@ doCollPadChar(LPart, Args, Width, Adjust, Precision, Acc) ->
    case LPart of
       <<".*", LeftLPart/binary>> ->
          [PadChar | LeftArgs] = Args,
-         doCollEncoding(LeftLPart, LeftArgs, Width, Adjust, Precision, PadChar, Acc);
+         doCollEncodingStrings(LeftLPart, LeftArgs, Width, Adjust, Precision, PadChar, Acc);
       <<".", PadChar:8/integer, LeftLPart/binary>> ->
-         doCollEncoding(LeftLPart, Args, Width, Adjust, Precision, PadChar, Acc);
+         doCollEncodingStrings(LeftLPart, Args, Width, Adjust, Precision, PadChar, Acc);
       _ ->
-         doCollEncoding(LPart, Args, Width, Adjust, Precision, 32, Acc)
+         doCollEncodingStrings(LPart, Args, Width, Adjust, Precision, 32, Acc)
    end.
 
-doCollEncoding(LPart, Args, Width, Adjust, Precision, PadChar, Acc) ->
+doCollEncodingStrings(LPart, Args, Width, Adjust, Precision, PadChar, Acc) ->
    case LPart of
+      <<"lt", LeftLPart/binary>> ->
+         LLeftLPart = LeftLPart,
+         Encoding = unicode,
+         Strings = false;
+      <<"tl", LeftLPart/binary>> ->
+         LLeftLPart = LeftLPart,
+         Encoding = unicode,
+         Strings = false;
       <<"t", LeftLPart/binary>> ->
-         %true = Char =/= $l,
-         doCollStrings(LeftLPart, Args, Width, Adjust, Precision, PadChar, unicode, Acc);
-      _ ->
-         doCollStrings(LPart, Args, Width, Adjust, Precision, PadChar, latin1, Acc)
-   end.
-
-doCollStrings(LPart, Args, Width, Adjust, Precision, PadChar, Encoding, Acc) ->
-   case LPart of
+         LLeftLPart = LeftLPart,
+         Encoding = unicode,
+         Strings = true;
       <<"l", LeftLPart/binary>> ->
-         %true = Char =/= $t,
-         doCollCA(LeftLPart, Args, Width, Adjust, Precision, PadChar, Encoding, false, Acc);
+         LLeftLPart = LeftLPart,
+         Encoding = latin1,
+         Strings = false;
       _ ->
-         doCollCA(LPart, Args, Width, Adjust, Precision, PadChar, Encoding, true, Acc)
-   end.
+         LLeftLPart = LPart,
+         Encoding = latin1,
+         Strings = true
+   end,
+   doCollCA(LLeftLPart, Args, Width, Adjust, Precision, PadChar, Encoding, Strings, Acc).
 
 doCollCA(LPart, Args, Width, Adjust, Precision, PadChar, Encoding, Strings, Acc) ->
    <<CtlChar:8/integer, LeftLPart/binary>> = LPart,
@@ -808,9 +815,9 @@ buildLimited([OneCA | Cs], NumOfPs, Count, MaxLen, I, Acc) ->
       #fmtSpec{ctlChar = CtlChar, args = Args, width = Width, adjust = Adjust, precision = Precision, padChar = PadChar, encoding = Encoding, strings = Strings} ->
          MaxChars = if MaxLen < 0 -> MaxLen; true -> MaxLen div Count end,
          IoListStr = ctlLimited(CtlChar, Args, Width, Adjust, Precision, PadChar, Encoding, Strings, MaxChars, I),
-         NewNumOfPs = ?IIF(CtlChar == $p orelse CtlChar == $P, NumOfPs - 1, NumOfPs),
+         NewNumOfPs = ?CASE(CtlChar == $p orelse CtlChar == $P, NumOfPs - 1, NumOfPs),
          NewCount = Count - 1,
-         NewMaxLen = ?IIF(MaxLen < 0, MaxLen, remainChars(MaxLen, charsLen(IoListStr))),
+         NewMaxLen = ?CASE(MaxLen < 0, MaxLen, remainChars(MaxLen, charsLen(IoListStr))),
          if
             NewNumOfPs > 0 ->
                buildLimited(Cs, NewNumOfPs, NewCount, NewMaxLen, I, [IoListStr | Acc]);
@@ -834,17 +841,17 @@ ctlLimited($s, Args, Width, Adjust, Precision, PadChar, Encoding, _Strings, Char
             end
    end,
    TemBinStr = strToChars(BinStr, Width, CharsLimit),
-   string(TemBinStr, ?IIF(CharsLimit < 0 orelse Width =:= none, Width, max(3, min(Width, CharsLimit))), Adjust, Precision, PadChar, Encoding);
+   string(TemBinStr, ?CASE(CharsLimit < 0 orelse Width =:= none, Width, max(3, min(Width, CharsLimit))), Adjust, Precision, PadChar, Encoding);
 ctlLimited($w, Args, Width, Adjust, Precision, PadChar, Encoding, _Strings, CharsLimit, _I) ->
    Chars = write(Args, -1, Encoding, CharsLimit),
    term(Chars, Width, Adjust, Precision, PadChar);
 ctlLimited($p, Args, Width, _Adjust, _Precision, _PadChar, Encoding, Strings, CharsLimit, _I) ->
-   write(Args, -1, ?IIF(Width == none, ?LineCCnt, Width), CharsLimit, Encoding, Strings);
+   write(Args, -1, ?CASE(Width == none, ?LineCCnt, Width), CharsLimit, Encoding, Strings);
 ctlLimited($W, {Args, Depth}, Width, Adjust, Precision, PadChar, Encoding, _Strings, CharsLimit, _I) ->
    Chars = write(Args, Depth, Encoding, CharsLimit),
    term(Chars, Width, Adjust, Precision, PadChar);
 ctlLimited($P, {Args, Depth}, Width, _Adjust, _Precision, _PadChar, Encoding, Strings, CharsLimit, _I) ->
-   write(Args, Depth, ?IIF(Width == none, ?LineCCnt, Width), CharsLimit, Encoding, Strings).
+   write(Args, Depth, ?CASE(Width == none, ?LineCCnt, Width), CharsLimit, Encoding, Strings).
 
 term(BinStrOrIoList, Width, Adjust, Precision, PadChar) ->
    if
@@ -871,7 +878,7 @@ term(BinStrOrIoList, Width, Adjust, Precision, PadChar) ->
    end.
 
 floatE(Float, Width, Adjust, Precision, PadChar) ->
-   NewPrecision = ?IIF(Precision == none, 6, Precision),
+   NewPrecision = ?CASE(Precision == none, 6, Precision),
 
    case Width of
       none ->
@@ -881,7 +888,7 @@ floatE(Float, Width, Adjust, Precision, PadChar) ->
    end.
 
 floatF(Float, Width, Adjust, Precision, PadChar) ->
-   NewPrecision = ?IIF(Precision == none, 6, Precision),
+   NewPrecision = ?CASE(Precision == none, 6, Precision),
 
    case Width of
       none ->
@@ -1089,25 +1096,25 @@ toBinary(Value) when is_binary(Value) -> Value;
 toBinary(Value) -> term_to_binary(Value).
 
 visualList(L, Encoding) ->
-   ?IIF(Encoding == latin1, visualLatin1List(L), visualUnicodeList(L, Encoding)).
+   ?CASE(Encoding == latin1, visualLatin1List(L), visualUnicodeList(L, Encoding)).
 
 visualBin(Bin, Encoding) ->
-   ?IIF(Encoding == latin1, visualLatin1Bin(Bin), visualUtf8Bin(Bin, io:printable_range())).
+   ?CASE(Encoding == latin1, visualLatin1Bin(Bin), visualUtf8Bin(Bin, io:printable_range())).
 
 visualLatin1List([]) -> true;
-visualLatin1List([C | Cs]) -> ?IIF(visualLatin1Char(C), visualLatin1List(Cs), false);
+visualLatin1List([C | Cs]) -> ?CASE(visualLatin1Char(C), visualLatin1List(Cs), false);
 visualLatin1List(_) -> false.
 
 visualUnicodeList([], _) -> true;
-visualUnicodeList([C | Cs], Encoding) -> ?IIF(visualUtf8Char(C, Encoding), visualUnicodeList(Cs, Encoding), false);
+visualUnicodeList([C | Cs], Encoding) -> ?CASE(visualUtf8Char(C, Encoding), visualUnicodeList(Cs, Encoding), false);
 visualUnicodeList(_, _) -> false.
 
 visualLatin1Bin(<<>>) -> true;
-visualLatin1Bin(<<C:8, Left/binary>>) -> ?IIF(visualLatin1Char(C), visualLatin1Bin(Left), false);
+visualLatin1Bin(<<C:8, Left/binary>>) -> ?CASE(visualLatin1Char(C), visualLatin1Bin(Left), false);
 visualLatin1Bin(_) -> false.
 
 visualUtf8Bin(<<>>, _) -> true;
-visualUtf8Bin(<<C/utf8, Left/binary>>, Range) -> ?IIF(visualUtf8Char(C, Range), visualUtf8Bin(Left, Range), false);
+visualUtf8Bin(<<C/utf8, Left/binary>>, Range) -> ?CASE(visualUtf8Char(C, Range), visualUtf8Bin(Left, Range), false);
 visualUtf8Bin(_, _) -> false.
 
 visualLatin1Char($\n) -> true;
